@@ -122,7 +122,7 @@ class LokiAdapter:
         # We'll redact the value if the key matches a sensitive pattern.
         patterns = [
             r'(?i)(password|passwd|pwd|secret|key|token|auth|credential|api[_-]?key|access[_-]?token|private[_-]?key|ssn|social[_-]?security)\s*[:=]\s*["\']?([^"\'\s]+)["\']?',
-            r'(?i)email\s*[:=]\s*["\']?([^"\'\s]+@[^"\'\s]+\.[^"\'\s]+)["\']?',
+            r'(?i)(email)\s*[:=]\s*["\']?([^"\'\s]+@[^"\'\s]+\.[^"\'\s]+)["\']?',
         ]
 
         redacted = text
@@ -164,34 +164,11 @@ class LokiAdapter:
         start_time = request.start_time.timestamp()
         end_time = request.end_time.timestamp()
 
-        # Define two LogQL queries for the two log categories.
-        # NOTE: These queries are examples and may need adjustment based on your Loki schema.
-        # We assume logs are in JSON format and contain the necessary fields.
-
-        # A. MongoDB slow-operation logs
-        # We assume logs with job="mongodb" and that each log line is a JSON string.
-        # We extract fields: timestamp, namespace, operation, duration, documentsExamined,
-        # documentsReturned, keysExamined, planSummary.
-        # We use the json parser to extract fields and then filter for slow operations?
-        # For simplicity, we retrieve all mongodb logs and let the caller decide what is slow.
-        # Alternatively, we can add a threshold in the LogQL (e.g., duration > "100ms").
-        # Filter by service label from the request target.
-        slow_op_query = (
-            '{job="mongodb"} | json | '
-            f'service="{request.target}" | '
-            "timestamp, namespace, operation, duration, documentsExamined, "
-            "documentsReturned, keysExamined, planSummary"
-        )
-
-        # B. Context/application events
-        # We assume logs with job="application" and that each log line is a JSON string.
-        # We look for deployment events (event="deployment") and service restarts (event="restart").
-        # We extract: event, service, version, timestamp.
-        # Filter by service label from the request target.
+        escaped_target = request.target.replace("\\", "\\\\").replace('"', '\\"')
+        slow_op_query = '{service="mongodb",source="diagnostic-log"} | json'
         context_query = (
-            '{job="application"} | json | '
-            f'service="{request.target}" | '
-            "event, service, version, timestamp"
+            f'{{service="{escaped_target}"}} | json | '
+            'event=~"deployment|restart|scenario_marker|alert_trigger"'
         )
 
         queries = [

@@ -9,6 +9,7 @@ class Settings(BaseSettings):
 
     app_env: str = "development"
     ai_provider: str = "mock"
+    evidence_mode: str = "mock"
     gemini_api_key: str = ""
     gemini_model: str = "gemini-2.5-flash"
     database_url: str = "sqlite:///./reliability.db"
@@ -29,6 +30,13 @@ class Settings(BaseSettings):
     def validate_provider(cls, value: str) -> str:
         if value not in {"mock", "gemini"}:
             raise ValueError("AI_PROVIDER must be 'mock' or 'gemini'")
+        return value
+
+    @field_validator("evidence_mode")
+    @classmethod
+    def validate_evidence_mode(cls, value: str) -> str:
+        if value not in {"mock", "live"}:
+            raise ValueError("EVIDENCE_MODE must be 'mock' or 'live'")
         return value
 
     @field_validator(

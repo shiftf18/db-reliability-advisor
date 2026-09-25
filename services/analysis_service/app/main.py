@@ -1,12 +1,16 @@
 from fastapi import FastAPI
 from prometheus_client import make_asgi_app
 
+from .adapters.loki import LokiAdapter
 from .adapters.mock import MockAdapter
+from .adapters.mongodb import MongoMetadataAdapter
+from .adapters.multi_source import MultiSourceAdapter
+from .adapters.prometheus import PrometheusAdapter
 from .ai.gemini_provider import GeminiAIProvider
 from .ai.mock_provider import MockAIProvider
 from .api import analyses, feedback, health
 from .config import Settings, get_settings
-from .orchestration.pipeline import AnalysisPipeline
+from .orchestration.analyzer import AnalysisOrchestrator
 from .storage.database import create_database_engine, initialize_database
 from .storage.feedback_repository import FeedbackRepository
 from .storage.repository import AnalysisRepository
@@ -25,8 +29,19 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         if runtime_settings.ai_provider == "gemini"
         else MockAIProvider()
     )
-    pipeline = AnalysisPipeline(
-        adapter=MockAdapter(),
+    evidence_adapter = (
+        MultiSourceAdapter(
+            [
+                PrometheusAdapter(runtime_settings.prometheus_url),
+                LokiAdapter(runtime_settings.loki_url),
+                MongoMetadataAdapter(runtime_settings.mongodb_uri),
+            ]
+        )
+        if runtime_settings.evidence_mode == "live"
+        else MockAdapter()
+    )
+    pipeline = AnalysisOrchestrator(
+        adapter=evidence_adapter,
         provider=provider,
         repository=repository,
         max_window_minutes=runtime_settings.max_analysis_window_minutes,

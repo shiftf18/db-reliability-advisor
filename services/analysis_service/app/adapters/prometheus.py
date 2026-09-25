@@ -1,3 +1,4 @@
+import math
 from uuid import uuid4
 
 import httpx
@@ -48,19 +49,22 @@ class PrometheusAdapter:
             return CollectedEvidence(evidence=[], missing_evidence=[])
 
         target = request.target
+        escaped_target = target.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
         # Use the end time of the analysis window as the query time.
         query_time = request.end_time.timestamp()
 
-        # Define the two allowlisted PromQL queries from the step description.
-        # We substitute the target from the request.
+        # Use the metric names and scrape job configured by this project.
         queries = {
             "request_p95_ms": (
-                f"histogram_quantile(0.95, "
-                f"sum(rate(http_request_duration_seconds_bucket"
-                f'{{service="{target}"}}[5m])) by (le))'
+                "histogram_quantile(0.95, "
+                "sum by (le) (rate(orders_api_request_duration_seconds_bucket"
+                f'{{job="{escaped_target}"}}[5m])))'
             ),
             "error_rate": (
-                f'sum(rate(http_requests_total{{service="{target}",status=~"5.."}}[5m]))'
+                "(sum(rate(orders_api_requests_total"
+                f'{{job="{escaped_target}",status=~"5.."}}[5m])) or vector(0)) '
+                "/ clamp_min(sum(rate(orders_api_requests_total"
+                f'{{job="{escaped_target}"}}[5m])), 1e-12)'
             ),
         }
 
@@ -91,6 +95,8 @@ class PrometheusAdapter:
                     value = float(value_str)
                 except ValueError as err:
                     raise ValueError(f"Invalid value from Prometheus: {value_str}") from err
+                if not math.isfinite(value):
+                    raise ValueError(f"Non-finite value from Prometheus: {value_str}")
 
                 # Normalize latency to milliseconds if needed.
                 if metric_name == "request_p95_ms":
@@ -98,7 +104,7 @@ class PrometheusAdapter:
                     value = value * 1000.0  # convert to milliseconds
                     unit = "ms"
                 else:
-                    # Error rate is a ratio (0-1).
+                    # The query returns failed requests divided by all requests.
                     unit = "ratio"
 
                 # Create Evidence object.

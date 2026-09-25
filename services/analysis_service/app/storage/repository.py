@@ -19,7 +19,9 @@ class AnalysisRepository:
     def __init__(self, engine: Engine):
         self.engine = engine
 
-    def create_run(self, analysis_id: str, request: AnalysisRequest, fixture_name: str) -> None:
+    def create_run(
+        self, analysis_id: str, request: AnalysisRequest, fixture_name: str | None
+    ) -> None:
         with Session(self.engine) as session:
             session.add(
                 AnalysisRun(

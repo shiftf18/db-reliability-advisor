@@ -2,6 +2,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from services.analysis_service.app.adapters.base import CollectedEvidence
 from services.analysis_service.app.adapters.mock import MockAdapter
 from services.analysis_service.app.ai.mock_provider import MockAIProvider
 from services.analysis_service.app.analyzers.deterministic import DeterministicAnalyzer
@@ -64,6 +65,45 @@ def test_both_scenarios_use_same_pipeline_and_persist_all_stages(tmp_path) -> No
     assert persistence.get_snapshot(connection_report.analysis_id) is not None
     for model in [AnalysisRun, EvidenceSnapshot, DeterministicResult, AIAttempt, AnalysisResult]:
         assert repository.count_records(model) == 2
+
+
+def test_insufficient_evidence_is_persisted_without_ai_call(tmp_path) -> None:
+    class UnavailableAdapter:
+        def collect(self, request, fixture_name=None):
+            return CollectedEvidence(
+                evidence=[],
+                missing_evidence=["Prometheus unavailable", "Loki unavailable"],
+            )
+
+    class ProviderMustNotRun:
+        name = "must-not-run"
+
+        def analyze(self, package):
+            raise AssertionError("AI must not be called without deterministic findings")
+
+    engine = create_database_engine("sqlite://")
+    initialize_database(engine)
+    repository = AnalysisRepository(engine)
+    persistence = SnapshotPersistence(tmp_path / "audit.db")
+    pipeline = AnalysisPipeline(
+        UnavailableAdapter(),
+        ProviderMustNotRun(),
+        repository,
+        persistence=persistence,
+    )
+
+    report = pipeline.run(request_at(10))
+    snapshot = persistence.get_snapshot(report.analysis_id)
+    run = repository.get_run(report.analysis_id)
+
+    assert report.status == "insufficient_data"
+    assert "Prometheus unavailable" in report.limitations
+    assert repository.get_result(report.analysis_id) is not None
+    assert run["status"] == "completed"
+    assert snapshot is not None
+    assert snapshot["evidence"] == []
+    assert snapshot["findings"] == []
+    assert repository.count_records(AIAttempt) == 0
 
 
 def test_pipeline_enforces_configured_maximum_window(tmp_path) -> None:
