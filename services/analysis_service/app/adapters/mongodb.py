@@ -64,7 +64,7 @@ class MongoMetadataAdapter:
 
                 # 1. Current indexes: db.orders.getIndexes()
                 try:
-                    indexes = list(collection.get_indexes())
+                    indexes = list(collection.list_indexes())
                     evidence = Evidence(
                         id=str(uuid4()),
                         kind="metadata",
@@ -84,7 +84,7 @@ class MongoMetadataAdapter:
 
                 # 2. Connection limit: db.serverStatus().connections (if available)
                 try:
-                    server_status = db.command("serverStatus")
+                    server_status = client.admin.command("serverStatus")
                     connections = server_status.get("connections")
                     if connections is not None:
                         evidence = Evidence(
@@ -95,7 +95,7 @@ class MongoMetadataAdapter:
                             unit=None,
                             source=EvidenceSource(
                                 system="mongodb",
-                                query="db.serverStatus().connections",
+                                query='db.adminCommand("serverStatus").connections',
                             ),
                             observation_window=EvidenceObservationWindow(
                                 start_time=request.start_time,

@@ -6,7 +6,13 @@ Removes duplicate evidence entries.
 
 from __future__ import annotations
 
+import json
+
 from ..normalizer import NormalizedLogObservation, NormalizedMetric, NormalizedMongoMetadata
+
+
+def _stable_value(value: object) -> str:
+    return json.dumps(value, sort_keys=True, default=str, separators=(",", ":"))
 
 
 def deduplicate_evidence[T: NormalizedMetric | NormalizedLogObservation | NormalizedMongoMetadata](
@@ -42,7 +48,7 @@ def _deduplicate_metrics(metrics: list[NormalizedMetric]) -> list[NormalizedMetr
     seen = set()
     deduped = []
     for metric in metrics:
-        key = (metric.name, metric.start_time, metric.end_time, metric.value)
+        key = (metric.name, metric.start_time, metric.end_time, _stable_value(metric.value))
         if key not in seen:
             seen.add(key)
             deduped.append(metric)
@@ -55,10 +61,7 @@ def _deduplicate_logs(logs: list[NormalizedLogObservation]) -> list[NormalizedLo
     deduped = []
     for log in logs:
         # Create a hashable representation of the log content
-        if isinstance(log.value, dict):
-            content_key = str(sorted(log.value.items()))
-        else:
-            content_key = str(log.value)
+        content_key = _stable_value(log.value)
         key = (log.timestamp, content_key)
         if key not in seen:
             seen.add(key)
@@ -71,7 +74,7 @@ def _deduplicate_metadata(metadata: list[NormalizedMongoMetadata]) -> list[Norma
     seen = set()
     deduped = []
     for meta in metadata:
-        key = (meta.name, meta.timestamp, str(meta.value))
+        key = (meta.name, meta.timestamp, _stable_value(meta.value))
         if key not in seen:
             seen.add(key)
             deduped.append(meta)

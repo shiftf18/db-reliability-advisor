@@ -1,4 +1,5 @@
 import math
+from datetime import UTC, datetime
 from uuid import uuid4
 
 import httpx
@@ -50,30 +51,38 @@ class PrometheusAdapter:
 
         target = request.target
         escaped_target = target.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
-        # Use the end time of the analysis window as the query time.
-        query_time = request.end_time.timestamp()
-
-        # Use the metric names and scrape job configured by this project.
-        queries = {
+        window_queries = {
             "request_p95_ms": (
                 "histogram_quantile(0.95, "
                 "sum by (le) (rate(orders_api_request_duration_seconds_bucket"
                 f'{{job="{escaped_target}"}}[5m])))'
             ),
-            "error_rate": (
+            "request_error_rate_percent": (
                 "(sum(rate(orders_api_requests_total"
                 f'{{job="{escaped_target}",status=~"5.."}}[5m])) or vector(0)) '
                 "/ clamp_min(sum(rate(orders_api_requests_total"
                 f'{{job="{escaped_target}"}}[5m])), 1e-12)'
             ),
+            "connection_utilization_percent": (
+                '100 * sum(mongodb_ss_connections{job="mongodb-exporter",conn_type="current"}) '
+                '/ clamp_min(sum(mongodb_ss_connections{job="mongodb-exporter",'
+                'conn_type="current"}) + '
+                'sum(mongodb_ss_connections{job="mongodb-exporter",conn_type="available"}), 1)'
+            ),
         }
+        duration_seconds = max(int((request.end_time - request.start_time).total_seconds()), 1)
+        step_seconds = max(15, math.ceil(duration_seconds / 240))
 
-        for metric_name, promql in queries.items():
+        for metric_name, promql in window_queries.items():
             try:
-                # Query Prometheus instant API.
                 response = httpx.get(
-                    f"{self.base_url}/api/v1/query",
-                    params={"query": promql, "time": query_time},
+                    f"{self.base_url}/api/v1/query_range",
+                    params={
+                        "query": promql,
+                        "start": request.start_time.timestamp(),
+                        "end": request.end_time.timestamp(),
+                        "step": step_seconds,
+                    },
                     timeout=10,
                 )
                 response.raise_for_status()
@@ -88,31 +97,42 @@ class PrometheusAdapter:
                     missing_evidence.append(f"No data for {metric_name}")
                     continue
 
-                # Extract the value (assuming scalar result).
-                # Prometheus returns a list of [timestamp, value] strings.
-                value_str = result[0]["value"][1]
-                try:
-                    value = float(value_str)
-                except ValueError as err:
-                    raise ValueError(f"Invalid value from Prometheus: {value_str}") from err
-                if not math.isfinite(value):
-                    raise ValueError(f"Non-finite value from Prometheus: {value_str}")
+                samples = []
+                for series in result:
+                    for timestamp, value_str in series.get("values", []):
+                        value = float(value_str)
+                        if not math.isfinite(value):
+                            continue
+                        if metric_name == "request_p95_ms":
+                            value *= 1000.0
+                        elif metric_name == "request_error_rate_percent":
+                            value *= 100.0
+                        samples.append(
+                            {
+                                "timestamp": datetime.fromtimestamp(float(timestamp), UTC),
+                                "value": value,
+                            }
+                        )
+                if not samples:
+                    missing_evidence.append(f"No samples for {metric_name}")
+                    continue
+                samples.sort(key=lambda sample: sample["timestamp"])
+                unit = (
+                    "ms"
+                    if metric_name == "request_p95_ms"
+                    else (
+                        "percent"
+                        if metric_name
+                        in {"request_error_rate_percent", "connection_utilization_percent"}
+                        else "ratio"
+                    )
+                )
 
-                # Normalize latency to milliseconds if needed.
-                if metric_name == "request_p95_ms":
-                    # The histogram_quantile returns seconds (assuming bucket in seconds).
-                    value = value * 1000.0  # convert to milliseconds
-                    unit = "ms"
-                else:
-                    # The query returns failed requests divided by all requests.
-                    unit = "ratio"
-
-                # Create Evidence object.
                 evidence = Evidence(
                     id=str(uuid4()),
                     kind="metric_window",
                     name=metric_name,
-                    value=value,
+                    value={"samples": samples},
                     unit=unit,
                     source=EvidenceSource(system="prometheus", query=promql),
                     observation_window=EvidenceObservationWindow(
@@ -127,6 +147,44 @@ class PrometheusAdapter:
                 # Record failure for this metric.
                 missing_evidence.append(f"Failed to collect {metric_name} from Prometheus: {exc}")
                 continue
+
+        failure_query = (
+            "increase(mongodb_ss_metrics_operation_numConnectionNetworkTimeouts"
+            f'{{job="mongodb-exporter"}}[{duration_seconds}s])'
+        )
+        try:
+            response = httpx.get(
+                f"{self.base_url}/api/v1/query",
+                params={"query": failure_query, "time": request.end_time.timestamp()},
+                timeout=10,
+            )
+            response.raise_for_status()
+            data = response.json()
+            if data["status"] != "success":
+                raise ValueError(f"Prometheus query failed: {data}")
+            result = data["data"]["result"]
+            if not result:
+                missing_evidence.append("No data for connection_failures")
+            else:
+                failure_count = float(result[0]["value"][1])
+                if not math.isfinite(failure_count):
+                    raise ValueError(f"Non-finite value from Prometheus: {failure_count}")
+                evidence_list.append(
+                    Evidence(
+                        id=str(uuid4()),
+                        kind="metric_window",
+                        name="connection_failures",
+                        value=max(round(failure_count), 0),
+                        unit="count",
+                        source=EvidenceSource(system="prometheus", query=failure_query),
+                        observation_window=EvidenceObservationWindow(
+                            start_time=request.start_time,
+                            end_time=request.end_time,
+                        ),
+                    )
+                )
+        except (httpx.RequestError, ValueError, KeyError, IndexError) as exc:
+            missing_evidence.append(f"Failed to collect connection_failures from Prometheus: {exc}")
 
         return CollectedEvidence(
             evidence=evidence_list,

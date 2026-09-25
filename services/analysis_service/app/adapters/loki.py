@@ -137,6 +137,47 @@ class LokiAdapter:
 
         return redacted
 
+    @staticmethod
+    def _normalize_slow_operation(log_data: dict[str, Any]) -> dict[str, Any]:
+        attributes = log_data.get("attr")
+        has_attributes = isinstance(attributes, dict)
+        if not isinstance(attributes, dict):
+            attributes = log_data
+        command = attributes.get("command")
+        operation = next(iter(command), None) if isinstance(command, dict) else None
+        if operation is None:
+            operation = attributes.get("type")
+        candidates = {
+            "namespace": attributes.get("ns") or attributes.get("namespace"),
+            "operation": operation,
+            "durationMs": attributes.get("durationMillis", attributes.get("durationMs")),
+            "documentsExamined": attributes.get(
+                "docsExamined", attributes.get("documentsExamined")
+            ),
+            "documentsReturned": attributes.get(
+                "nreturned",
+                attributes.get("docsReturned", attributes.get("documentsReturned")),
+            ),
+            "keysExamined": attributes.get("keysExamined"),
+            "planSummary": attributes.get("planSummary", attributes.get("plan_summary")),
+        }
+        normalized = {key: value for key, value in candidates.items() if value is not None}
+        has_operation_stats = any(
+            key in normalized
+            for key in (
+                "durationMs",
+                "documentsExamined",
+                "documentsReturned",
+                "keysExamined",
+                "planSummary",
+            )
+        )
+        if has_operation_stats:
+            return normalized
+        if has_attributes or isinstance(command, dict):
+            return {"message": log_data.get("msg", "MongoDB slow operation")}
+        return log_data
+
     def collect(
         self, request: AnalysisRequest, fixture_name: str | None = None
     ) -> CollectedEvidence:
@@ -229,6 +270,9 @@ class LokiAdapter:
                         except (json.JSONDecodeError, TypeError):
                             # If not JSON, we still create an event with the raw line as message.
                             log_data = {"raw_message": raw_line}
+
+                        if name == "mongodb_slow_operation" and isinstance(log_data, dict):
+                            log_data = self._normalize_slow_operation(log_data)
 
                         # Sanitize the log data to redact sensitive information.
                         log_data = self._sanitize_value(log_data)

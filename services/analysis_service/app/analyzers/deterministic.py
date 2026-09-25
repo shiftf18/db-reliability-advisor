@@ -185,10 +185,12 @@ class DeterministicAnalyzer:
         """
         findings: list[DeterministicFinding] = []
         pressure = None
-        if "connection_failures" in items:
+        if "connection_utilization_percent" in items:
             pressure = self._create_connection_pressure_finding(
                 items["connection_utilization_percent"],
-                items["connection_failures"],
+                items.get("connection_failures"),
+                items.get("request_p95_ms"),
+                items.get("request_error_rate_percent") or items.get("error_rate"),
                 "D1",
             )
         if pressure:
@@ -205,51 +207,71 @@ class DeterministicAnalyzer:
         # Rule 3: Query Plan Stability (contradicting evidence)
         plan = items.get("query_plan")
         ratio = items.get("scan_ratio")
-        if plan and ratio:
+        if plan:
             plan_value = self._comparison(plan)
-            ratio_value = self._comparison(ratio)
-            if plan_value and ratio_value and plan_value["before"] == plan_value["after"]:
-                try:
-                    before_ratio = float(ratio_value["before"])
-                    after_ratio = float(ratio_value["after"])
-                    change_percent = (
-                        (after_ratio - before_ratio) / max(abs(before_ratio), 1)
-                    ) * 100
-                except (TypeError, ValueError):
-                    change_percent = None
-                threshold = self._settings.scan_efficiency_change_threshold_percent
-                if change_percent is not None and abs(change_percent) <= threshold:
-                    findings.append(
-                        DeterministicFinding(
-                            id=f"D{len(findings) + 1}",
-                            rule="query_plan_stable",
-                            result={
-                                "plan": plan_value["after"],
-                                "scanRatioChangePercent": round(change_percent),
-                            },
-                            evidence_ids=[plan.id, ratio.id],
-                        )
+            window_plan = plan.value if isinstance(plan.value, dict) else {}
+            plan_is_stable = (
+                plan_value is not None and plan_value["before"] == plan_value["after"]
+            ) or window_plan.get("stable") is True
+            if plan_is_stable:
+                result: dict[str, Any] = {
+                    "plan": plan_value["after"] if plan_value else window_plan.get("observed")
+                }
+                evidence_ids = [plan.id]
+                if ratio:
+                    ratio_value = self._comparison(ratio)
+                    if ratio_value is not None:
+                        try:
+                            before_ratio = float(ratio_value["before"])
+                            after_ratio = float(ratio_value["after"])
+                            change_percent = (
+                                (after_ratio - before_ratio) / max(abs(before_ratio), 1)
+                            ) * 100
+                        except (TypeError, ValueError):
+                            change_percent = None
+                        if (
+                            change_percent is not None
+                            and abs(change_percent)
+                            <= self._settings.scan_efficiency_change_threshold_percent
+                        ):
+                            result["scanRatioChangePercent"] = round(change_percent)
+                            evidence_ids.append(ratio.id)
+                    else:
+                        scan_ratio = self._numeric_value(ratio)
+                        if scan_ratio is not None:
+                            result["scanRatio"] = scan_ratio
+                            evidence_ids.append(ratio.id)
+                findings.append(
+                    DeterministicFinding(
+                        id=f"D{len(findings) + 1}",
+                        rule="query_plan_stable",
+                        result=result,
+                        evidence_ids=evidence_ids,
                     )
+                )
 
         return findings
 
     def _create_connection_pressure_finding(
         self,
         connections: Evidence,
-        failures: Evidence,
+        failures: Evidence | None,
+        request_latency: Evidence | None,
+        error_rate: Evidence | None,
         finding_id: str,
     ) -> DeterministicFinding | None:
         """Create a pressure finding when utilization is high or failures occurred."""
         connection_value = self._comparison(connections)
-        if connection_value is None:
+        after = (
+            self._numeric_value(connections)
+            if connection_value is None
+            else self._numeric_value(connections, "after")
+        )
+        if after is None:
             return None
-        try:
-            before = float(connection_value["before"])
-            after = float(connection_value["after"])
-        except (TypeError, ValueError):
-            return None
+        before = self._numeric_value(connections, "before") if connection_value else None
 
-        failure_value = failures.value
+        failure_value = failures.value if failures else 0
         if isinstance(failure_value, dict):
             failure_count = failure_value.get("count", 0)
         elif isinstance(failure_value, (int, float)):
@@ -265,15 +287,49 @@ class DeterministicAnalyzer:
         if after < threshold and failure_count == 0:
             return None
 
+        evidence_ids = [connections.id]
+        if failures is not None:
+            evidence_ids.append(failures.id)
+        result: dict[str, Any] = {
+            "utilizationPercent": after,
+            "failureCount": failure_count,
+            "thresholdPercent": threshold,
+        }
+        if before is not None:
+            result["beforePercent"] = before
+            result["afterPercent"] = after
+        if request_latency is not None:
+            latency = self._numeric_value(request_latency)
+            if latency is not None:
+                result["requestP95Ms"] = latency
+                evidence_ids.append(request_latency.id)
+        if error_rate is not None:
+            rate = self._numeric_value(error_rate)
+            if rate is not None:
+                result[
+                    "errorRatePercent"
+                    if error_rate.name == "request_error_rate_percent"
+                    else "errorRateRatio"
+                ] = rate
+                evidence_ids.append(error_rate.id)
+
         return DeterministicFinding(
             id=finding_id,
             rule="connection_pressure",
-            result={
-                "utilizationPercent": after,
-                "failureCount": failure_count,
-                "beforePercent": before,
-                "afterPercent": after,
-                "thresholdPercent": threshold,
-            },
-            evidence_ids=[connections.id, failures.id],
+            result=result,
+            evidence_ids=evidence_ids,
         )
+
+    @classmethod
+    def _numeric_value(cls, evidence: Evidence, key: str = "after") -> float | None:
+        comparison = cls._comparison(evidence)
+        if comparison is not None:
+            value: Any = comparison.get(key)
+        else:
+            value = evidence.value
+            if isinstance(value, dict):
+                value = value.get("median", value.get("value"))
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None

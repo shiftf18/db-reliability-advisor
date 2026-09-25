@@ -106,7 +106,7 @@ def test_connection_pressure_rule() -> None:
     assert cp_finding.result["beforePercent"] == 25.0
     assert cp_finding.result["afterPercent"] == 92.0
     assert cp_finding.result["thresholdPercent"] == 90.0
-    assert cp_finding.evidence_ids == ["E1", "E4"]
+    assert cp_finding.evidence_ids == ["E1", "E4", "E2", "E3"]
 
 
 def test_query_plan_stable_rule() -> None:
@@ -278,7 +278,7 @@ def test_connection_scenario_evidence_ids() -> None:
         assert all(isinstance(eid, str) for eid in finding.evidence_ids)
 
     cp_finding = next(f for f in findings if f.rule == "connection_pressure")
-    assert set(cp_finding.evidence_ids) == {"E1", "E4"}
+    assert set(cp_finding.evidence_ids) == {"E1", "E2", "E3", "E4"}
 
     latency_finding = next(f for f in findings if f.rule == "latency_regression")
     assert latency_finding.evidence_ids == ["E2"]
@@ -355,6 +355,84 @@ def test_connection_pressure_finding_includes_failure_count() -> None:
 
     assert pressure.result["utilizationPercent"] == 92.0
     assert pressure.result["failureCount"] == 14
+
+
+def test_connection_pressure_uses_window_metrics_without_comparisons() -> None:
+    evidence = [
+        Evidence(
+            id="E1",
+            kind="metric_window",
+            name="connection_utilization_percent",
+            value=92.0,
+            unit="percent",
+            source=EvidenceSource(system="prometheus"),
+        ),
+        Evidence(
+            id="E2",
+            kind="metric_window",
+            name="connection_failures",
+            value=3,
+            unit="count",
+            source=EvidenceSource(system="prometheus"),
+        ),
+        Evidence(
+            id="E3",
+            kind="metric_window",
+            name="request_p95_ms",
+            value=900.0,
+            unit="ms",
+            source=EvidenceSource(system="prometheus"),
+        ),
+        Evidence(
+            id="E4",
+            kind="metric_window",
+            name="request_error_rate_percent",
+            value=4.0,
+            unit="percent",
+            source=EvidenceSource(system="prometheus"),
+        ),
+    ]
+
+    finding = DeterministicAnalyzer().analyze(evidence)[0]
+
+    assert finding.rule == "connection_pressure"
+    assert finding.result["utilizationPercent"] == 92
+    assert finding.result["failureCount"] == 3
+    assert finding.result["requestP95Ms"] == 900
+    assert finding.result["errorRatePercent"] == 4.0
+    assert finding.evidence_ids == ["E1", "E2", "E3", "E4"]
+
+
+def test_stable_query_plan_can_be_reported_from_window_evidence() -> None:
+    evidence = [
+        Evidence(
+            id="E1",
+            kind="metric_window",
+            name="connection_utilization_percent",
+            value=92.0,
+            source=EvidenceSource(system="prometheus"),
+        ),
+        Evidence(
+            id="E2",
+            kind="query_plan",
+            name="query_plan",
+            value={"observed": "IXSCAN", "stable": True},
+            source=EvidenceSource(system="loki"),
+        ),
+        Evidence(
+            id="E3",
+            kind="query_window",
+            name="scan_ratio",
+            value=20.0,
+            source=EvidenceSource(system="loki"),
+        ),
+    ]
+
+    findings = DeterministicAnalyzer().analyze(evidence)
+
+    stable = next(finding for finding in findings if finding.rule == "query_plan_stable")
+    assert stable.result == {"plan": "IXSCAN", "scanRatio": 20.0}
+    assert stable.evidence_ids == ["E2", "E3"]
 
 
 def test_window_metric_without_comparison_is_skipped() -> None:

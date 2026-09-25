@@ -14,6 +14,8 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+from services.analysis_service.app.adapters.base import CollectedEvidence
+from services.analysis_service.app.analyzers.deterministic import DeterministicAnalyzer
 from services.analysis_service.app.contracts.models import (
     AnalysisRequest,
     Evidence,
@@ -22,9 +24,11 @@ from services.analysis_service.app.contracts.models import (
 )
 from services.analysis_service.app.evidence.builder.deduplicator import deduplicate_evidence
 from services.analysis_service.app.evidence.builder.event_discovery import discover_context_events
+from services.analysis_service.app.evidence.builder.evidence_kinds import build_evidence_kinds
 from services.analysis_service.app.evidence.builder.filter import filter_evidence
 from services.analysis_service.app.evidence.builder.id_generator import assign_sequential_ids
 from services.analysis_service.app.evidence.builder.missing_tracker import track_missing_evidence
+from services.analysis_service.app.evidence.builder.router import EvidenceBuilder
 from services.analysis_service.app.evidence.builder.sanitizer import sanitize_value
 from services.analysis_service.app.evidence.normalizer import (
     NormalizedLogObservation,
@@ -373,6 +377,271 @@ def test_discover_context_events_skips_unknown_event_types():
     result = discover_context_events(logs, request)
     assert len(result) == 1
     assert result[0].value["event"] == "deployment"
+
+
+def test_build_context_event_evidence_uses_normalized_time_fields():
+    request = AnalysisRequest(
+        target="orders-api",
+        start_time=datetime(2024, 1, 1, 11, 55, 0, tzinfo=UTC),
+        end_time=datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC),
+    )
+    event = make_normalized_log(
+        name="context_event",
+        value={"event": "deployment", "service": "orders-api"},
+        timestamp=datetime(2024, 1, 1, 11, 57, 0, tzinfo=UTC),
+        start_time=request.start_time,
+        end_time=request.end_time,
+    )
+
+    evidence = build_evidence_kinds([], [], [], [event], request)
+
+    assert len(evidence) == 1
+    assert evidence[0].kind == "event"
+    assert evidence[0].timestamp == event.timestamp
+    assert evidence[0].observation_window.start_time == request.start_time
+    assert evidence[0].observation_window.end_time == request.end_time
+
+
+def test_build_evidence_kinds_compares_metrics_and_slow_operations_at_event():
+    request = AnalysisRequest(
+        target="orders-api",
+        start_time=datetime(2024, 1, 1, 11, 55, 0, tzinfo=UTC),
+        end_time=datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC),
+    )
+    event_time = datetime(2024, 1, 1, 11, 57, 0, tzinfo=UTC)
+    event = make_normalized_log(
+        name="context_event",
+        value={"event": "deployment", "service": "orders-api"},
+        timestamp=event_time,
+    )
+    metric = make_normalized_metric(
+        name="request_p95_ms",
+        unit="ms",
+        value={
+            "samples": [
+                {"timestamp": datetime(2024, 1, 1, 11, 56, tzinfo=UTC), "value": 200},
+                {"timestamp": datetime(2024, 1, 1, 11, 58, tzinfo=UTC), "value": 1000},
+            ]
+        },
+    )
+    logs = [
+        make_normalized_log(
+            name="mongodb_slow_operation",
+            timestamp=datetime(2024, 1, 1, 11, 56, tzinfo=UTC),
+            value={
+                "documentsExamined": 1000,
+                "documentsReturned": 50,
+                "planSummary": "IXSCAN",
+            },
+        ),
+        make_normalized_log(
+            name="mongodb_slow_operation",
+            timestamp=datetime(2024, 1, 1, 11, 58, tzinfo=UTC),
+            value={
+                "documentsExamined": 200000,
+                "documentsReturned": 50,
+                "planSummary": "COLLSCAN",
+            },
+        ),
+    ]
+
+    evidence = build_evidence_kinds([metric], logs, [], [event], request)
+    by_name = {item.name: item for item in evidence}
+
+    assert by_name["request_p95_ms"].value == {"before": 200, "after": 1000}
+    assert by_name["documents_examined"].value == {"before": 1000, "after": 200000}
+    assert by_name["documents_returned"].value == {"before": 50, "after": 50}
+    assert by_name["query_plan"].value == {"before": "IXSCAN", "after": "COLLSCAN"}
+
+
+def test_raw_evidence_pipeline_produces_scenario_a_findings():
+    request = AnalysisRequest(
+        target="orders-api",
+        start_time=datetime(2024, 1, 1, 11, 55, 0, tzinfo=UTC),
+        end_time=datetime(2024, 1, 1, 12, 0, 0, tzinfo=UTC),
+    )
+    event_time = datetime(2024, 1, 1, 11, 57, 0, tzinfo=UTC)
+    evidence = [
+        make_evidence(
+            kind="metric_window",
+            name="request_p95_ms",
+            value={
+                "samples": [
+                    {"timestamp": datetime(2024, 1, 1, 11, 56, tzinfo=UTC), "value": 200},
+                    {"timestamp": datetime(2024, 1, 1, 11, 58, tzinfo=UTC), "value": 1000},
+                ]
+            },
+            unit="ms",
+            system="prometheus",
+            query="request p95 range query",
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+        make_evidence(
+            kind="event",
+            name="context_event",
+            value={"event": "deployment", "service": "orders-api", "version": "v2"},
+            system="loki",
+            query="deployment event query",
+            timestamp=event_time,
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+        make_evidence(
+            kind="event",
+            name="mongodb_slow_operation",
+            value={
+                "documentsExamined": 1000,
+                "documentsReturned": 50,
+                "planSummary": "IXSCAN",
+            },
+            system="loki",
+            query="slow operation query",
+            timestamp=datetime(2024, 1, 1, 11, 56, tzinfo=UTC),
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+        make_evidence(
+            kind="event",
+            name="mongodb_slow_operation",
+            value={
+                "documentsExamined": 200000,
+                "documentsReturned": 50,
+                "planSummary": "COLLSCAN",
+            },
+            system="loki",
+            query="slow operation query",
+            timestamp=datetime(2024, 1, 1, 11, 58, tzinfo=UTC),
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+    ]
+
+    package = EvidenceBuilder().build(
+        "AN-RAW-SCENARIO-A",
+        request,
+        CollectedEvidence(evidence=evidence, missing_evidence=[]),
+    )
+    findings = DeterministicAnalyzer().analyze(package.evidence)
+
+    assert {finding.rule for finding in findings} == {
+        "latency_regression",
+        "scan_efficiency_regression",
+        "query_plan_change",
+    }
+
+
+def test_raw_evidence_pipeline_produces_scenario_b_findings():
+    request = AnalysisRequest(
+        target="orders-api",
+        start_time=datetime(2024, 1, 1, 11, 0, 0, tzinfo=UTC),
+        end_time=datetime(2024, 1, 1, 11, 10, 0, tzinfo=UTC),
+    )
+    event_time = datetime(2024, 1, 1, 11, 5, 0, tzinfo=UTC)
+    before_time = datetime(2024, 1, 1, 11, 3, 0, tzinfo=UTC)
+    after_time = datetime(2024, 1, 1, 11, 7, 0, tzinfo=UTC)
+
+    def range_samples(before, after):
+        return {
+            "samples": [
+                {"timestamp": before_time, "value": before},
+                {"timestamp": after_time, "value": after},
+            ]
+        }
+
+    evidence = [
+        make_evidence(
+            kind="metric_window",
+            name="connection_utilization_percent",
+            value=range_samples(25, 92),
+            unit="percent",
+            system="prometheus",
+            query="connection utilization range query",
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+        make_evidence(
+            kind="metric_window",
+            name="connection_failures",
+            value=14,
+            unit="count",
+            system="prometheus",
+            query="connection timeout increase query",
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+        make_evidence(
+            kind="metric_window",
+            name="request_p95_ms",
+            value=range_samples(220, 1100),
+            unit="ms",
+            system="prometheus",
+            query="request p95 range query",
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+        make_evidence(
+            kind="metric_window",
+            name="request_error_rate_percent",
+            value=range_samples(0, 4),
+            unit="percent",
+            system="prometheus",
+            query="request error rate range query",
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+        make_evidence(
+            kind="event",
+            name="context_event",
+            value={"event": "alert_trigger", "service": "orders-api"},
+            system="loki",
+            query="alert event query",
+            timestamp=event_time,
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+        make_evidence(
+            kind="event",
+            name="mongodb_slow_operation",
+            value={
+                "documentsExamined": 1000,
+                "documentsReturned": 50,
+                "planSummary": "IXSCAN",
+            },
+            system="loki",
+            query="slow operation query",
+            timestamp=before_time,
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+        make_evidence(
+            kind="event",
+            name="mongodb_slow_operation",
+            value={
+                "documentsExamined": 1100,
+                "documentsReturned": 50,
+                "planSummary": "IXSCAN",
+            },
+            system="loki",
+            query="slow operation query",
+            timestamp=after_time,
+            start_time=request.start_time,
+            end_time=request.end_time,
+        ),
+    ]
+
+    package = EvidenceBuilder().build(
+        "AN-RAW-SCENARIO-B",
+        request,
+        CollectedEvidence(evidence=evidence, missing_evidence=[]),
+    )
+    findings = DeterministicAnalyzer().analyze(package.evidence)
+
+    assert {finding.rule for finding in findings} == {
+        "connection_pressure",
+        "latency_regression",
+        "query_plan_stable",
+    }
 
 
 # =============================================================================

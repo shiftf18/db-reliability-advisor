@@ -53,7 +53,7 @@ class AnalysisOrchestrator:
             package = package.model_copy(
                 update={"deterministic_findings": self.analyzer.analyze(package.evidence)}
             )
-            package_payload = package.model_dump(mode="json", by_alias=True)
+            package_payload = package.model_dump(mode="json", by_alias=True, exclude_none=True)
             self.persistence.save_snapshot(
                 analysis_id=analysis_id,
                 contract_a_data=request.model_dump(mode="json", by_alias=True),
