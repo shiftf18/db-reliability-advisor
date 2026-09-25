@@ -1,6 +1,9 @@
 import json
 import logging
+import os
 import time
+from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from bson import ObjectId
@@ -14,9 +17,24 @@ from .metrics import ERRORS, REQUEST_DURATION, REQUESTS
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger("orders-api")
+event_log_file = os.getenv("ORDERS_API_LOG_FILE")
+if event_log_file:
+    event_log_path = Path(event_log_file)
+    event_log_path.parent.mkdir(parents=True, exist_ok=True)
+    logger.addHandler(logging.FileHandler(event_log_path, encoding="utf-8"))
 
 app = FastAPI(title="Orders API", version="0.1.0")
 settings = get_settings()
+logger.info(
+    json.dumps(
+        {
+            "event": "deployment",
+            "service": "orders-api",
+            "version": app.version,
+            "timestamp": datetime.now(UTC).isoformat(),
+        }
+    )
+)
 
 
 @app.middleware("http")

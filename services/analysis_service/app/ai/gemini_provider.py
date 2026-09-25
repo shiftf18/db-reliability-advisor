@@ -23,7 +23,7 @@ class GeminiAIProvider(AIProvider):
             model=self.model,
             contents=(
                 f"{SYSTEM_PROMPT}\nAnalysis package (Contract B):\n"
-                f"{package.model_dump_json(by_alias=True)}"
+                f"{package.model_dump_json(by_alias=True, exclude_none=True)}"
             ),
             config={
                 "response_mime_type": "application/json",

@@ -3,7 +3,7 @@ name: db-reliability-advisor
 services:
   mongo:
     image: mongo:8.0.32-noble
-    command: ["mongod", "--config", "/etc/mongod.conf"]
+    command: [ "mongod", "--config", "/etc/mongod.conf" ]
     environment:
       MONGO_INITDB_ROOT_USERNAME: root
       MONGO_INITDB_ROOT_PASSWORD: local_root_password
@@ -16,14 +16,14 @@ services:
       - ./infra/mongo/mongod.conf:/etc/mongod.conf:ro
       - ./infra/mongo/init:/docker-entrypoint-initdb.d:ro
     healthcheck:
-      test: ["CMD-SHELL", "mongosh --quiet --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin --eval 'quit(db.adminCommand({ping:1}).ok ? 0 : 2)' localhost:27017/admin"]
+      test: [ "CMD-SHELL", "mongosh --quiet --username $$MONGO_INITDB_ROOT_USERNAME --password $$MONGO_INITDB_ROOT_PASSWORD --authenticationDatabase admin --eval 'quit(db.adminCommand({ping:1}).ok ? 0 : 2)' localhost:27017/admin" ]
       interval: 10s
       timeout: 5s
       retries: 15
 
   mongodb-exporter:
     image: percona/mongodb_exporter:0.53.0
-    command: ["--compatible-mode", "--collect-all"]
+    command: [ "--compatible-mode", "--collect-all" ]
     environment:
       MONGODB_URI: mongodb://exporter_monitor:exporter_password@mongo:27017/admin?authSource=admin
     ports:
@@ -37,9 +37,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["uvicorn", "services.analysis_service.app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+    command: [ "uvicorn", "services.analysis_service.app.main:app", "--host", "0.0.0.0", "--port", "8000" ]
     env_file: .env
     environment:
+      EVIDENCE_MODE: live
       DATABASE_URL: sqlite:////data/reliability.db
       MONGODB_URI: mongodb://app_user:app_password@mongo:27017/reliability_demo?authSource=reliability_demo
       PROMETHEUS_URL: http://prometheus:9090
@@ -49,7 +50,7 @@ services:
     volumes:
       - analysis-data:/data
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=2)" ]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -59,16 +60,19 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    command: ["uvicorn", "services.orders_api.app.main:app", "--host", "0.0.0.0", "--port", "8001"]
+    command: [ "uvicorn", "services.orders_api.app.main:app", "--host", "0.0.0.0", "--port", "8001" ]
     environment:
       MONGODB_URI: mongodb://app_user:app_password@mongo:27017/reliability_demo?authSource=reliability_demo
+      ORDERS_API_LOG_FILE: /var/log/orders-api/events.jsonl
+    volumes:
+      - orders-api-logs:/var/log/orders-api
     ports:
       - "8001:8001"
     depends_on:
       mongo:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)"]
+      test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health', timeout=2)" ]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -92,27 +96,27 @@ services:
       orders-api:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/ready"]
+      test: [ "CMD", "wget", "--spider", "-q", "http://127.0.0.1:9090/-/ready" ]
       interval: 10s
       timeout: 5s
       retries: 15
 
   alertmanager:
     image: prom/alertmanager:v0.34.1
-    command: ["--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager"]
+    command: [ "--config.file=/etc/alertmanager/alertmanager.yml", "--storage.path=/alertmanager" ]
     ports:
       - "9093:9093"
     volumes:
       - ./infra/alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     healthcheck:
-      test: ["CMD", "wget", "--spider", "-q", "http://127.0.0.1:9093/-/ready"]
+      test: [ "CMD", "wget", "--spider", "-q", "http://127.0.0.1:9093/-/ready" ]
       interval: 10s
       timeout: 5s
       retries: 15
 
   loki:
     image: grafana/loki:3.7.8
-    command: ["-config.file=/etc/loki/local-config.yaml"]
+    command: [ "-config.file=/etc/loki/local-config.yaml" ]
     ports:
       - "3100:3100"
     volumes:
@@ -121,17 +125,18 @@ services:
     healthcheck:
       # Loki's current image is distroless (no shell/wget). The end-to-end smoke
       # test checks /ready; this container-native probe verifies the binary can run.
-      test: ["CMD", "/usr/bin/loki", "-version"]
+      test: [ "CMD", "/usr/bin/loki", "-version" ]
       interval: 10s
       timeout: 5s
       retries: 15
 
   alloy:
     image: grafana/alloy:v1.19.2
-    command: ["run", "/etc/alloy/config.alloy", "--storage.path=/var/lib/alloy/data"]
+    command: [ "run", "/etc/alloy/config.alloy", "--storage.path=/var/lib/alloy/data" ]
     volumes:
       - ./infra/alloy/config.alloy:/etc/alloy/config.alloy:ro
       - mongo-logs:/var/log/mongodb:ro
+      - orders-api-logs:/var/log/orders-api:ro
     depends_on:
       loki:
         condition: service_healthy
@@ -157,7 +162,7 @@ services:
       loki:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1"]
+      test: [ "CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1:3000/api/health || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 15
@@ -169,3 +174,4 @@ volumes:
   prometheus-data:
   grafana-data:
   analysis-data:
+  orders-api-logs:

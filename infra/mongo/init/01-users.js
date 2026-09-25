@@ -2,7 +2,10 @@ const appDb = db.getSiblingDB("reliability_demo");
 appDb.createUser({
   user: "app_user",
   pwd: "app_password",
-  roles: [{ role: "readWrite", db: "reliability_demo" }],
+  roles: [
+    { role: "readWrite", db: "reliability_demo" },
+    { role: "clusterMonitor", db: "admin" },
+  ],
 });
 appDb.createCollection("orders");
 appDb.orders.createIndex(

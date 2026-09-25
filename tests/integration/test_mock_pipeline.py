@@ -1,6 +1,9 @@
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
+from jsonschema import Draft202012Validator, FormatChecker
 
 from services.analysis_service.app.adapters.base import CollectedEvidence
 from services.analysis_service.app.adapters.mock import MockAdapter
@@ -36,6 +39,13 @@ class SnapshotCheckingProvider(MockAIProvider):
             by_alias=True,
             exclude_none=True,
         )
+        schema_path = (
+            Path(__file__).resolve().parents[2]
+            / "contracts"
+            / "contract-b-analysis-package.schema.json"
+        )
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
+        Draft202012Validator(schema, format_checker=FormatChecker()).validate(package_payload)
         assert snapshot["evidence"] == package_payload["evidence"]
         assert snapshot["findings"] == package_payload["deterministicFindings"]
         return super().analyze(package)

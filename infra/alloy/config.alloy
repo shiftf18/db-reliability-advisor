@@ -14,6 +14,19 @@ loki.source.file "mongodb" {
   forward_to = [loki.write.local.receiver]
 }
 
+local.file_match "orders_api" {
+  path_targets = [{
+    __path__ = "/var/log/orders-api/*.jsonl",
+    service  = "orders-api",
+    source   = "application-log",
+  }]
+}
+
+loki.source.file "orders_api" {
+  targets    = local.file_match.orders_api.targets
+  forward_to = [loki.write.local.receiver]
+}
+
 loki.write "local" {
   endpoint {
     url = "http://loki:3100/loki/api/v1/push"
