@@ -12,6 +12,8 @@ class DeterministicAnalyzer:
     Thresholds are configurable via environment variables.
     """
 
+    RULE_VERSION = "1.0.0"
+
     def __init__(self) -> None:
         self._settings = get_settings()
 

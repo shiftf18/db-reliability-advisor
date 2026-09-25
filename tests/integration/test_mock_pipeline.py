@@ -19,7 +19,21 @@ from services.analysis_service.app.storage.models import (
     DeterministicResult,
     EvidenceSnapshot,
 )
+from services.analysis_service.app.storage.persistence import SnapshotPersistence
 from services.analysis_service.app.storage.repository import AnalysisRepository
+
+
+class SnapshotCheckingProvider(MockAIProvider):
+    def __init__(self, persistence: SnapshotPersistence) -> None:
+        self.persistence = persistence
+
+    def analyze(self, package):
+        snapshot = self.persistence.get_snapshot(package.analysis_id)
+        assert snapshot is not None
+        package_payload = package.model_dump(mode="json", by_alias=True)
+        assert snapshot["evidence"] == package_payload["evidence"]
+        assert snapshot["findings"] == package_payload["deterministicFindings"]
+        return super().analyze(package)
 
 
 def request_at(hour: int) -> AnalysisRequest:
@@ -30,11 +44,13 @@ def request_at(hour: int) -> AnalysisRequest:
     )
 
 
-def test_both_scenarios_use_same_pipeline_and_persist_all_stages() -> None:
+def test_both_scenarios_use_same_pipeline_and_persist_all_stages(tmp_path) -> None:
     engine = create_database_engine("sqlite://")
     initialize_database(engine)
     repository = AnalysisRepository(engine)
-    pipeline = AnalysisPipeline(MockAdapter(), MockAIProvider(), repository)
+    persistence = SnapshotPersistence(tmp_path / "audit.db")
+    provider = SnapshotCheckingProvider(persistence)
+    pipeline = AnalysisPipeline(MockAdapter(), provider, repository, persistence=persistence)
 
     query_report = pipeline.run(request_at(10), "query-regression")
     connection_report = pipeline.run(request_at(11), "connection-pressure")
@@ -44,15 +60,21 @@ def test_both_scenarios_use_same_pipeline_and_persist_all_stages() -> None:
     assert query_report.analysis_id != connection_report.analysis_id
     assert repository.get_result(query_report.analysis_id) is not None
     assert repository.get_result(connection_report.analysis_id) is not None
+    assert persistence.get_snapshot(query_report.analysis_id) is not None
+    assert persistence.get_snapshot(connection_report.analysis_id) is not None
     for model in [AnalysisRun, EvidenceSnapshot, DeterministicResult, AIAttempt, AnalysisResult]:
         assert repository.count_records(model) == 2
 
 
-def test_pipeline_enforces_configured_maximum_window() -> None:
+def test_pipeline_enforces_configured_maximum_window(tmp_path) -> None:
     engine = create_database_engine("sqlite://")
     initialize_database(engine)
     pipeline = AnalysisPipeline(
-        MockAdapter(), MockAIProvider(), AnalysisRepository(engine), max_window_minutes=5
+        MockAdapter(),
+        MockAIProvider(),
+        AnalysisRepository(engine),
+        max_window_minutes=5,
+        persistence=SnapshotPersistence(tmp_path / "audit.db"),
     )
     with pytest.raises(ValueError, match="configured maximum"):
         pipeline.run(request_at(10), "query-regression")

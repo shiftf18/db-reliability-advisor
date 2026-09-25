@@ -1,6 +1,8 @@
 from datetime import timedelta
 from uuid import uuid4
 
+from services.analysis_service.app.storage import SnapshotPersistence
+
 from ..adapters.base import EvidenceAdapter
 from ..ai.base import AIProvider
 from ..ai.validator import GroundingValidationError, GroundingValidator
@@ -20,6 +22,7 @@ class AnalysisPipeline:
         provider: AIProvider,
         repository: AnalysisRepository,
         max_window_minutes: int = 60,
+        persistence: SnapshotPersistence | None = None,
     ):
         self.adapter = adapter
         self.provider = provider
@@ -29,6 +32,7 @@ class AnalysisPipeline:
         self.analyzer = DeterministicAnalyzer()
         self.validator = GroundingValidator()
         self.assembler = ReportAssembler()
+        self.persistence = persistence or SnapshotPersistence()
 
     def run(
         self,
@@ -50,6 +54,13 @@ class AnalysisPipeline:
                 update={"deterministic_findings": self.analyzer.analyze(package.evidence)}
             )
             package_payload = package.model_dump(mode="json", by_alias=True)
+            self.persistence.save_snapshot(
+                analysis_id=analysis_id,
+                contract_a_data=request.model_dump(mode="json", by_alias=True),
+                evidence=package_payload["evidence"],
+                findings=package_payload["deterministicFindings"],
+                rule_version=self.analyzer.RULE_VERSION,
+            )
             self.repository.save_analysis_package(analysis_id, package_payload)
 
             interpretation = self.provider.analyze(package)

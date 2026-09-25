@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -7,6 +8,13 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+@dataclass
+class RuleVersion:
+    version_id: str
+    description: str
+    created_at: str
 
 
 class Base(DeclarativeBase):
