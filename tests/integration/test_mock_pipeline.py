@@ -110,6 +110,38 @@ def test_insufficient_evidence_is_persisted_without_ai_call(tmp_path) -> None:
     assert repository.count_records(AIAttempt) == 0
 
 
+def test_snapshot_failure_marks_run_failed_before_ai_call() -> None:
+    class SnapshotPersistenceFailure:
+        def save_snapshot(self, **kwargs):
+            return False
+
+    class ProviderMustNotRun:
+        name = "must-not-run"
+
+        def analyze(self, package):
+            raise AssertionError("AI must not run without a persisted snapshot")
+
+    engine = create_database_engine("sqlite://")
+    initialize_database(engine)
+    repository = AnalysisRepository(engine)
+    pipeline = AnalysisPipeline(
+        MockAdapter(),
+        ProviderMustNotRun(),
+        repository,
+        persistence=SnapshotPersistenceFailure(),
+    )
+
+    with pytest.raises(RuntimeError, match="Failed to persist analysis snapshot"):
+        pipeline.run(request_at(10), "query-regression")
+
+    with engine.connect() as connection:
+        run = connection.execute(AnalysisRun.__table__.select()).mappings().one()
+    assert run["status"] == "failed"
+    assert repository.count_records(EvidenceSnapshot) == 0
+    assert repository.count_records(DeterministicResult) == 0
+    assert repository.count_records(AIAttempt) == 0
+
+
 def test_pipeline_enforces_configured_maximum_window(tmp_path) -> None:
     engine = create_database_engine("sqlite://")
     initialize_database(engine)

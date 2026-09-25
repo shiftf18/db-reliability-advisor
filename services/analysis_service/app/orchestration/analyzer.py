@@ -54,13 +54,15 @@ class AnalysisOrchestrator:
                 update={"deterministic_findings": self.analyzer.analyze(package.evidence)}
             )
             package_payload = package.model_dump(mode="json", by_alias=True, exclude_none=True)
-            self.persistence.save_snapshot(
+            snapshot_saved = self.persistence.save_snapshot(
                 analysis_id=analysis_id,
                 contract_a_data=request.model_dump(mode="json", by_alias=True),
                 evidence=package_payload["evidence"],
                 findings=package_payload["deterministicFindings"],
                 rule_version=self.analyzer.RULE_VERSION,
             )
+            if not snapshot_saved:
+                raise RuntimeError(f"Failed to persist analysis snapshot for {analysis_id}")
             self.repository.save_analysis_package(analysis_id, package_payload)
 
             if not package.deterministic_findings:

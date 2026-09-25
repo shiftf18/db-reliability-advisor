@@ -1,6 +1,11 @@
+import json
+from pathlib import Path
+
 from fastapi.testclient import TestClient
+from jsonschema import Draft202012Validator, FormatChecker
 
 from services.analysis_service.app.config import Settings
+from services.analysis_service.app.contracts.models import AnalysisPackage
 from services.analysis_service.app.storage.models import FeedbackRecord
 
 
@@ -38,7 +43,7 @@ def test_mock_report_renders_and_feedback_form_creates_contract_d(monkeypatch) -
     assert app.state.feedback_repository.count_records(FeedbackRecord) == 1
 
 
-def test_create_analysis_accepts_valid_contract_a(monkeypatch) -> None:
+def test_create_analysis_returns_contract_b_for_valid_contract_a(monkeypatch) -> None:
     monkeypatch.setenv("DATABASE_URL", "sqlite://")
     monkeypatch.setenv("APP_ENV", "test")
     monkeypatch.setenv("AI_PROVIDER", "mock")
@@ -58,8 +63,20 @@ def test_create_analysis_accepts_valid_contract_a(monkeypatch) -> None:
     )
 
     assert response.status_code == 201
-    assert response.json()["analysisId"].startswith("AN-")
-    assert response.json()["status"] == "completed"
+    package = AnalysisPackage.model_validate(response.json())
+    assert package.analysis_id.startswith("AN-")
+    assert package.target == "orders-api"
+    assert package.evidence
+    assert package.deterministic_findings
+    schema_path = (
+        Path(__file__).resolve().parents[2]
+        / "contracts"
+        / "contract-b-analysis-package.schema.json"
+    )
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    Draft202012Validator(schema, format_checker=FormatChecker()).validate(response.json())
+    result = TestClient(app).get(f"/api/v1/analyses/{package.analysis_id}/result")
+    assert result.status_code == 200
 
 
 def test_create_analysis_rejects_invalid_contract_a(monkeypatch) -> None:

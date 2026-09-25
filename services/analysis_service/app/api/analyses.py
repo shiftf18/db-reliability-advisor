@@ -5,7 +5,7 @@ from fastapi import APIRouter, HTTPException, Request, status
 from fastapi.responses import HTMLResponse
 
 from ..contracts.models import (
-    AnalysisAccepted,
+    AnalysisPackage,
     AnalysisRequest,
     AnalysisStatus,
     ValidatedReport,
@@ -55,15 +55,23 @@ def get_analysis_report(analysis_id: str, request: Request) -> HTMLResponse:
 
 
 # POST handler for analyses endpoint
-@router.post("/analyses", response_model=AnalysisAccepted, status_code=status.HTTP_201_CREATED)
-def create_analysis(payload: AnalysisRequest, request: Request) -> AnalysisAccepted:
+@router.post(
+    "/analyses",
+    response_model=AnalysisPackage,
+    response_model_exclude_none=True,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_analysis(payload: AnalysisRequest, request: Request) -> AnalysisPackage:
     try:
         report = _pipeline(request).run(payload)
     except ValueError as exc:
         raise HTTPException(
             status_code=422, detail=str(exc)
         ) from exc  # Error handling for invalid Contract A
-    return AnalysisAccepted(analysis_id=report.analysis_id, status="completed")
+    package = request.app.state.repository.get_analysis_package(report.analysis_id)
+    if package is None:
+        raise HTTPException(status_code=500, detail="Contract B package was not persisted")
+    return AnalysisPackage.model_validate(package)
 
 
 @router.get("/analyses/{analysis_id}", response_model=AnalysisStatus)

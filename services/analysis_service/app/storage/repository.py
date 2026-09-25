@@ -96,6 +96,16 @@ class AnalysisRepository:
             result = session.get(AnalysisResult, analysis_id)
             return result.report_payload if result else None
 
+    def get_analysis_package(self, analysis_id: str) -> dict[str, Any] | None:
+        with Session(self.engine) as session:
+            statement = (
+                select(EvidenceSnapshot.package_payload)
+                .where(EvidenceSnapshot.analysis_id == analysis_id)
+                .order_by(EvidenceSnapshot.id.desc())
+                .limit(1)
+            )
+            return session.scalar(statement)
+
     def count_records(self, model: type[Any]) -> int:
         with Session(self.engine) as session:
             return len(session.scalars(select(model)).all())
