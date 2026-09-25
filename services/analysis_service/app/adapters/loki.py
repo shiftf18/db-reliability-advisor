@@ -34,17 +34,27 @@ class LokiAdapter:
     def _is_sensitive_key(self, key: str) -> bool:
         """
         Check if a key indicates a sensitive field that should be redacted.
-        
+
         Args:
             key: The dictionary key to check
-            
+
         Returns:
             True if the key indicates a sensitive field, False otherwise
         """
         sensitive_keywords = {
-            'password', 'passwd', 'pwd', 'secret', 'key', 'token', 'auth', 
-            'credential', 'api_key', 'access_token', 'private_key', 'ssn', 
-            'social_security'
+            "password",
+            "passwd",
+            "pwd",
+            "secret",
+            "key",
+            "token",
+            "auth",
+            "credential",
+            "api_key",
+            "access_token",
+            "private_key",
+            "ssn",
+            "social_security",
         }
         return key.lower() in sensitive_keywords
 
@@ -165,19 +175,23 @@ class LokiAdapter:
         # We use the json parser to extract fields and then filter for slow operations?
         # For simplicity, we retrieve all mongodb logs and let the caller decide what is slow.
         # Alternatively, we can add a threshold in the LogQL (e.g., duration > "100ms").
+        # Filter by service label from the request target.
         slow_op_query = (
             '{job="mongodb"} | json | '
-            'timestamp, namespace, operation, duration, documentsExamined, '
-            'documentsReturned, keysExamined, planSummary'
+            f'service="{request.target}" | '
+            "timestamp, namespace, operation, duration, documentsExamined, "
+            "documentsReturned, keysExamined, planSummary"
         )
 
         # B. Context/application events
         # We assume logs with job="application" and that each log line is a JSON string.
         # We look for deployment events (event="deployment") and service restarts (event="restart").
         # We extract: event, service, version, timestamp.
+        # Filter by service label from the request target.
         context_query = (
             '{job="application"} | json | '
-            'event, service, version, timestamp'
+            f'service="{request.target}" | '
+            "event, service, version, timestamp"
         )
 
         queries = [
@@ -266,9 +280,7 @@ class LokiAdapter:
                 json.JSONDecodeError,
             ) as exc:
                 # Record failure for this query.
-                missing_evidence.append(
-                    f"Failed to collect {name} from Loki: {exc}"
-                )
+                missing_evidence.append(f"Failed to collect {name} from Loki: {exc}")
                 continue
 
         return CollectedEvidence(
