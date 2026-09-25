@@ -1,4 +1,3 @@
- 
 """
 Evidence Builder for DBADV-02.
 

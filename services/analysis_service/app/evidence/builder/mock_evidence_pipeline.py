@@ -1,4 +1,3 @@
- 
 """
 Mock Evidence Handler for DBADV-02.
 
@@ -24,7 +23,7 @@ from ...contracts.models import (
 class MockEvidenceHandler:
     """
     Handles mock evidence that's already in final format.
-    
+
     The mock adapter returns evidence that matches the Contract B schema
     exactly, so we just need to:
     1. Validate the evidence structure
@@ -32,7 +31,7 @@ class MockEvidenceHandler:
     3. Update timestamps/observation windows to match the request
     4. Track missing evidence
     """
-    
+
     def build(
         self,
         analysis_id: str,
@@ -41,26 +40,26 @@ class MockEvidenceHandler:
     ) -> AnalysisPackage:
         """
         Build AnalysisPackage from mock evidence.
-        
+
         Args:
             analysis_id: Unique identifier for this analysis
             request: The analysis request containing target and time window
             collected: Pre-formatted mock evidence
-            
+
         Returns:
             AnalysisPackage with mock evidence
         """
         evidence = list(collected.evidence)
-        
+
         # Update timestamps and observation windows to match the request
         evidence = self._align_to_request_window(evidence, request)
-        
+
         # Ensure sequential IDs (E1, E2, E3...)
         evidence = self._ensure_sequential_ids(evidence)
-        
+
         # Track missing evidence
         missing_evidence = list(collected.missing_evidence)
-        
+
         return AnalysisPackage(
             analysis_id=analysis_id,
             target=request.target,
@@ -69,7 +68,7 @@ class MockEvidenceHandler:
             deterministic_findings=[],
             missing_evidence=missing_evidence,
         )
-    
+
     def _align_to_request_window(
         self, evidence: list[Evidence], request: AnalysisRequest
     ) -> list[Evidence]:
@@ -77,29 +76,29 @@ class MockEvidenceHandler:
         aligned = []
         duration = request.end_time - request.start_time
         midpoint = request.start_time + duration / 2
-        
+
         for item in evidence:
             # Create a copy with updated time fields
             updates: dict[str, Any] = {}
-            
+
             # For events, update timestamp to midpoint
             if item.kind == "event":
                 updates["timestamp"] = midpoint
-            
+
             # For non-events, update observation window
             if item.kind != "event":
                 updates["observation_window"] = EvidenceObservationWindow(
                     start_time=request.start_time,
                     end_time=request.end_time,
                 )
-            
+
             if updates:
                 aligned.append(item.model_copy(update=updates))
             else:
                 aligned.append(item)
-        
+
         return aligned
-    
+
     def _ensure_sequential_ids(self, evidence: list[Evidence]) -> list[Evidence]:
         """Ensure evidence IDs are sequential (E1, E2, E3...)."""
         for i, item in enumerate(evidence, 1):

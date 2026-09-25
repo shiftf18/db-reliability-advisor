@@ -55,13 +55,12 @@ class PrometheusAdapter:
         # We substitute the target from the request.
         queries = {
             "request_p95_ms": (
-                f'histogram_quantile(0.95, '
-                f'sum(rate(http_request_duration_seconds_bucket'
+                f"histogram_quantile(0.95, "
+                f"sum(rate(http_request_duration_seconds_bucket"
                 f'{{service="{target}"}}[5m])) by (le))'
             ),
             "error_rate": (
-                f'sum(rate(http_requests_total'
-                f'{{service="{target}",status=~"5.."}}[5m]))'
+                f'sum(rate(http_requests_total{{service="{target}",status=~"5.."}}[5m]))'
             ),
         }
 
@@ -120,9 +119,7 @@ class PrometheusAdapter:
 
             except (httpx.RequestError, ValueError, KeyError, IndexError) as exc:
                 # Record failure for this metric.
-                missing_evidence.append(
-                    f"Failed to collect {metric_name} from Prometheus: {exc}"
-                )
+                missing_evidence.append(f"Failed to collect {metric_name} from Prometheus: {exc}")
                 continue
 
         return CollectedEvidence(

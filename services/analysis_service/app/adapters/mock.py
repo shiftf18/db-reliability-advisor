@@ -37,9 +37,7 @@ class MockAdapter:
         evidence = [
             item.model_copy(
                 update={
-                    "timestamp": timestamp
-                    if item.kind == "event"
-                    else item.timestamp,
+                    "timestamp": timestamp if item.kind == "event" else item.timestamp,
                     "observation_window": (
                         EvidenceObservationWindow(
                             start_time=request.start_time,

@@ -16,13 +16,13 @@ from ..reporting.renderer import TEMPLATES
 # Contract A API Endpoint
 # Objective: Create the POST /api/v1/analyses endpoint that accepts analysis requests
 # Done:
-#   - Router created 
-#   - POST handler implemented with validation of Contract A 
-#   - Analysis ID generated in format AN-[random string] 
+#   - Router created
+#   - POST handler implemented with validation of Contract A
+#   - Analysis ID generated in format AN-[random string]
 #   - Request passed to orchestrator for processing
-#   - Error handling for invalid Contract A 
+#   - Error handling for invalid Contract A
 # Note:
-#   - Returns 201 Created (synchronous processing) as per MVP allowance 
+#   - Returns 201 Created (synchronous processing) as per MVP allowance
 #   - Unit tests for endpoint validation not yet implemented
 router = APIRouter(prefix="/api/v1")
 dev_router = APIRouter(prefix="/api/v1/dev/mock")
