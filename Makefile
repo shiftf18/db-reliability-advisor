@@ -1,5 +1,5 @@
-PYTHON ?= .venv/bin/python
-PIP ?= .venv/bin/pip
+PYTHON ?= .venv\Scripts\python.exe
+PIP ?= .venv\Scripts\pip.exe
 
 .PHONY: help setup up down restart logs ps seed test test-contracts test-integration lint format smoke demo-query demo-connection reset
 
@@ -9,7 +9,7 @@ help:
 	@echo "down              Stop the local stack"
 	@echo "restart           Restart the local stack"
 	@echo "logs              Follow Docker Compose logs"
-	@echo "ps                 Show service status"
+	@echo "ps                Show service status"
 	@echo "seed               Seed deterministic MongoDB orders"
 	@echo "test               Run all Python tests"
 	@echo "test-contracts     Validate schemas and contract examples"
@@ -22,8 +22,8 @@ help:
 	@echo "reset              Stop stack and remove local Docker volumes"
 
 setup:
-	python3 -m venv .venv
-	$(PIP) install -e '.[dev]'
+	python -m venv .venv
+	$(PIP) install -e ".[dev]"
 
 up:
 	docker compose up -d --build
@@ -40,7 +40,7 @@ ps:
 	docker compose ps
 
 seed:
-	docker compose exec analysis-service python scripts/seed_orders.py --uri 'mongodb://app_user:app_password@mongo:27017/reliability_demo?authSource=reliability_demo'
+	docker compose exec analysis-service python scripts/seed_orders.py --uri "mongodb://app_user:app_password@mongo:27017/reliability_demo?authSource=reliability_demo"
 
 test:
 	$(PYTHON) -m pytest
@@ -58,19 +58,13 @@ format:
 	$(PYTHON) -m ruff format .
 
 smoke:
-	sh scripts/smoke_test.sh
+	powershell -ExecutionPolicy Bypass -File scripts\smoke_test.ps1
 
 demo-query:
-	@response=$$(curl --fail --silent --show-error -X POST http://localhost:8000/api/v1/dev/mock/query-regression); \
-	  echo "$$response" | python3 -m json.tool; \
-	  id=$$(echo "$$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["analysisId"])'); \
-	  echo "Report: http://localhost:8000/analyses/$$id/report"
+	powershell -ExecutionPolicy Bypass -Command "$$response = Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/v1/dev/mock/query-regression'; $$response | ConvertTo-Json -Depth 10; Write-Host ('Report: http://localhost:8000/analyses/' + $$response.analysisId + '/report')"
 
 demo-connection:
-	@response=$$(curl --fail --silent --show-error -X POST http://localhost:8000/api/v1/dev/mock/connection-pressure); \
-	  echo "$$response" | python3 -m json.tool; \
-	  id=$$(echo "$$response" | python3 -c 'import json,sys; print(json.load(sys.stdin)["analysisId"])'); \
-	  echo "Report: http://localhost:8000/analyses/$$id/report"
+	powershell -ExecutionPolicy Bypass -Command "$$response = Invoke-RestMethod -Method Post -Uri 'http://localhost:8000/api/v1/dev/mock/connection-pressure'; $$response | ConvertTo-Json -Depth 10; Write-Host ('Report: http://localhost:8000/analyses/' + $$response.analysisId + '/report')"
 
 reset:
 	docker compose down -v --remove-orphans
